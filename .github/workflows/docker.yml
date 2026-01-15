@@ -1,10 +1,10 @@
-name: Build and Push Docker Images (GHCR)
+name: Build and Push Docker Images
 
 on:
   push:
     tags:
-      - "v*"
-      - "mcp-v*"
+      - "v*" # 主项目版本
+      - "mcp-v*" # MCP 版本
   workflow_dispatch:
     inputs:
       image:
@@ -17,45 +17,52 @@ on:
           - crawler
           - mcp
 
+env:
+  REGISTRY: docker.io
+
 jobs:
   build-crawler:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    # 条件：v* 标签（排除 mcp-v*）或手动触发选择 all/crawler
     if: |
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref, 'refs/tags/mcp-v')) ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.image == 'all' || github.event.inputs.image == 'crawler'))
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Login to GHCR
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            network=host
+
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/nightjoyip/trendradar
+          images: wantcat/trendradar
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v5
         env:
           BUILDKIT_PROGRESS: plain
         with:
-          context: ./docker
+          context: .
           file: ./docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
@@ -66,41 +73,58 @@ jobs:
 
   build-mcp:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    # 条件：mcp-v* 标签 或手动触发选择 all/mcp
     if: |
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/mcp-v')) ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.image == 'all' || github.event.inputs.image == 'mcp'))
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Login to GHCR
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            network=host
+
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/mcp-v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/mcp-v}"
+            echo "version=${VERSION}" >> $GITHUB_OUTPUT
+            echo "major_minor=$(echo $VERSION | cut -d. -f1,2)" >> $GITHUB_OUTPUT
+          else
+            echo "version=latest" >> $GITHUB_OUTPUT
+            echo "major_minor=latest" >> $GITHUB_OUTPUT
+          fi
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/nightjoyip/trendradar-mcp
+          images: wantcat/trendradar-mcp
           tags: |
-            type=match,pattern=mcp-v(.*),group=1
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.major_minor }}
             type=raw,value=latest
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v5
         env:
           BUILDKIT_PROGRESS: plain
         with:
-          context: ./docker
+          context: .
           file: ./docker/Dockerfile.mcp
           platforms: linux/amd64,linux/arm64
           push: true
